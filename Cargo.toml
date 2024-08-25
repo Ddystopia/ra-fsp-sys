@@ -3,7 +3,38 @@ name = "ra-fsp-sys"
 version = "0.1.1"
 edition = "2021"
 
+[features]
+default = [
+  "bsp-mcu_vcc_mv_3300", "bsp-stack_main_bytes_16384",
+  "mod-r_dmac",
+  "mod-r_elc",
+  "mod-r_flash_hp", "mod-r_flash_hp-code_flash_programming_enable", "mod-r_flash_hp-data_flash_programming_enable",
+  "mod-r_icu",
+  "mod-r_ioport",
+]
+
+bsp-mcu_vcc_mv_2700 = []
+bsp-mcu_vcc_mv_3300 = []
+bsp-mcu_vcc_mv_5000 = []
+bsp-stack_main_bytes_4096 = []
+bsp-stack_main_bytes_8192 = []
+bsp-stack_main_bytes_16384 = []
+
+mod-r_dmac = []
+mod-r_elc = []
+
+mod-r_flash_hp = []
+mod-r_flash_hp-code_flash_programming_enable = []
+mod-r_flash_hp-data_flash_programming_enable = []
+
+mod-r_icu = []
+mod-r_ioport = []
+
 [dependencies]
 
 [build-dependencies]
-bindgen = "0.69.4"
+bindgen = "0.69"
+cc = "1.1"
+walkdir = "2"
+build_cfg = "1.1"
+tera = "1.20"
