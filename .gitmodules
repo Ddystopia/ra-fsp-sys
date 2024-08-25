@@ -1,0 +1,6 @@
+[submodule "ra-fsp"]
+	path = ra-fsp
+	url = git@gitlab.swind.sk:os/ra-fsp.git
+[submodule "cmsis"]
+	path = cmsis
+	url = git@gitlab.swind.sk:os/cmsis5.git

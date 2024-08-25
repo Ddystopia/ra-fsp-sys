@@ -1,0 +1,8 @@
+#ifndef R_FLASH_HP_CFG_H_
+#define R_FLASH_HP_CFG_H_
+
+#define FLASH_HP_CFG_PARAM_CHECKING_ENABLE          (BSP_CFG_PARAM_CHECKING_ENABLE)
+#define FLASH_HP_CFG_CODE_FLASH_PROGRAMMING_ENABLE  {{ r_flash_hp.code_flash_programming_enable }}
+#define FLASH_HP_CFG_DATA_FLASH_PROGRAMMING_ENABLE  {{ r_flash_hp.data_flash_programming_enable }}
+
+#endif /* R_FLASH_HP_CFG_H_ */

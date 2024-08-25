@@ -3,4 +3,4 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
-include!(concat!(env!("OUT_DIR"), "/ra_fsp.rs"));
+include!(concat!(env!("OUT_DIR"), "/ra-fsp.rs"));
