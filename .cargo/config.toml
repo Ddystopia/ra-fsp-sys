@@ -1,6 +1,5 @@
 [build]
 target = "thumbv7em-none-eabihf"
-toolchain = "nightly"
 
 [env]
 TARGET_CC = "/opt/arm-none-eabi-gcc-11.4.0-nano/bin/arm-bare_newlibnano_cortex_m4f_nommu-eabihf-gcc"

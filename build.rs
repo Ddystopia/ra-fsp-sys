@@ -1,7 +1,9 @@
-use std::collections::HashMap;
-use std::io::BufRead;
-use std::path::{Path, PathBuf};
-use std::{fs, io::Write as _, path};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{BufRead, Write},
+    path::{Path, PathBuf},
+};
 
 use build_cfg::{build_cfg, build_cfg_main};
 use tera::Tera;
@@ -136,6 +138,7 @@ pub fn wrap_component(modules: &[&str]) {
     // compile fsp library
 
     let bsp_stems = [
+        "system",
         "bsp_clocks",
         "bsp_delay",
         "bsp_irq",
@@ -158,87 +161,95 @@ pub fn wrap_component(modules: &[&str]) {
             build.file(e.path());
         });
 
-    // add custom system.c
-    let system_c = src_c.join("system.c");
+    // add custom init.c
+    let system_c = src_c.join("init.c");
     build.file(&system_c);
     println!("cargo:rerun-if-changed={}", system_c.to_str().unwrap());
 
-    build.includes(&include_dirs).compile("fsp");
-
-    // summarize modules enabled by the features to wrapper header
-
-    // let mut re_derive_const_default = bindgen::RegexSet::new();
-    // for prefix in allow_prefixes {
-    //     re_derive_const_default.insert(String::from(format!("{}_.*", prefix.to_uppercase())));
-    // }
-    let wrapper = out_path.join("fsp_wrapper.h");
-
-    let mut wrapper_h = fs::OpenOptions::new()
-        .create(true)
+    let mut rust_codegen = fs::OpenOptions::new()
         .write(true)
-        .open(&wrapper)
-        .expect("Can't create fsp_wrapper.h");
+        .create(true)
+        .truncate(true)
+        .open(out_path.join("ra-fsp.rs"))
+        .unwrap();
 
-    for header in ["bsp_api", "fsp_common_api"] {
-        writeln!(wrapper_h, "#include <{header}.h>").expect("Error writing fsp_wrapper.h");
-
-        // Tell cargo to invalidate the built crate whenever the wrapper changes
-        // println!("cargo:rerun-if-changed={}", wrapper.to_str().unwrap());
+    if let Some(mcu_group) = mcu_group() {
+        build
+            .includes(&include_dirs)
+            .define(mcu_group, Some("1"))
+            .compile("bare-fsp");
+    } else {
+        write!(rust_codegen, "compile_error!(\"No MCU group defined\");").unwrap();
     }
 
-    for module in modules {
-        writeln!(wrapper_h, "#include <{module}.h>").expect("Error writing fsp_wrapper.h");
+    println!("cargo:rustc-link-lib=static=bare-fsp");
 
-        // Tell cargo to invalidate the built crate whenever the wrapper changes
-        // println!("cargo:rerun-if-changed={}", wrapper.to_str().unwrap());
-    }
+    let linker_script = fs::read_to_string("ra-fsp-sys.x.in").unwrap();
+    println!("cargo:rerun-if-changed=ra-fsp-sys.x.in");
 
-    writeln!(wrapper_h, "void fsp_init();").unwrap();
+    // Put the linker script somewhere the linker can find it
+    fs::write(out_path.join("ra-fsp-sys.x"), linker_script).unwrap();
+    println!("cargo:rustc-link-search={}", out_path.display());
+}
 
-    drop(wrapper_h);
-
-    // generate bindings
-    let mut builder = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
-        .header(wrapper.to_str().unwrap())
-        .use_core()
-        .clang_args(
-            include_dirs
-                .iter()
-                .map(|d| path::absolute(d).expect("Can't resolve absolute path"))
-                .map(|e| format!("-I{}", e.as_os_str().to_str().unwrap())),
-        )
-        /*
-        .clang_args(
-            compile_defs
-                .trim_start_matches("[")
-                .trim_end_matches("]")
-                .split(';')
-                .map(|e| format!("-D{e}")),
-        )
-        */
-        ;
-
-    builder = builder
-        .derive_default(true)
-        // .derive_debug(true)
-        // .derive_partialeq(true)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
-
-    // Tell cargo to invalidate the built crate whenever any of the
-    // included header files changed.
-
-    let bindings = builder
-        // Finish the builder and generate the bindings.
-        .generate()
-        // Unwrap the Result and panic on failure.
-        .expect("Unable to generate bindings");
-
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
-    bindings
-        .write_to_file(out_path.join(format!("ra-fsp.rs")))
-        .expect("Couldn't write bindings!");
+fn mcu_group() -> Option<&'static str> {
+    Some(if cfg!(feature = "ra0e1") {
+        "BSP_MCU_GROUP_RA0E1"
+    } else if cfg!(feature = "ra2a1") {
+        "BSP_MCU_GROUP_RA2A1"
+    } else if cfg!(feature = "ra2a2") {
+        "BSP_MCU_GROUP_RA2A2"
+    } else if cfg!(feature = "ra2e1") {
+        "BSP_MCU_GROUP_RA2E1"
+    } else if cfg!(feature = "ra2e2") {
+        "BSP_MCU_GROUP_RA2E2"
+    } else if cfg!(feature = "ra2e3") {
+        "BSP_MCU_GROUP_RA2E3"
+    } else if cfg!(feature = "ra2l1") {
+        "BSP_MCU_GROUP_RA2L1"
+    } else if cfg!(feature = "ra4e1") {
+        "BSP_MCU_GROUP_RA4E1"
+    } else if cfg!(feature = "ra4e2") {
+        "BSP_MCU_GROUP_RA4E2"
+    } else if cfg!(feature = "ra4m1") {
+        "BSP_MCU_GROUP_RA4M1"
+    } else if cfg!(feature = "ra4m2") {
+        "BSP_MCU_GROUP_RA4M2"
+    } else if cfg!(feature = "ra4m3") {
+        "BSP_MCU_GROUP_RA4M3"
+    } else if cfg!(feature = "ra4t1") {
+        "BSP_MCU_GROUP_RA4T1"
+    } else if cfg!(feature = "ra4w1") {
+        "BSP_MCU_GROUP_RA4W1"
+    } else if cfg!(feature = "ra6e1") {
+        "BSP_MCU_GROUP_RA6E1"
+    } else if cfg!(feature = "ra6e2") {
+        "BSP_MCU_GROUP_RA6E2"
+    } else if cfg!(feature = "ra6m1") {
+        "BSP_MCU_GROUP_RA6M1"
+    } else if cfg!(feature = "ra6m2") {
+        "BSP_MCU_GROUP_RA6M2"
+    } else if cfg!(feature = "ra6m3") {
+        "BSP_MCU_GROUP_RA6M3"
+    } else if cfg!(feature = "ra6m4") {
+        "BSP_MCU_GROUP_RA6M4"
+    } else if cfg!(feature = "ra6m5") {
+        "BSP_MCU_GROUP_RA6M5"
+    } else if cfg!(feature = "ra6t1") {
+        "BSP_MCU_GROUP_RA6T1"
+    } else if cfg!(feature = "ra6t2") {
+        "BSP_MCU_GROUP_RA6T2"
+    } else if cfg!(feature = "ra6t3") {
+        "BSP_MCU_GROUP_RA6T3"
+    } else if cfg!(feature = "ra8m1") {
+        "BSP_MCU_GROUP_RA8M1"
+    } else if cfg!(feature = "ra8d1") {
+        "BSP_MCU_GROUP_RA8D1"
+    } else if cfg!(feature = "ra8t1") {
+        "BSP_MCU_GROUP_RA8T1"
+    } else {
+        return None;
+    })
 }
 
 macro_rules! add_module {

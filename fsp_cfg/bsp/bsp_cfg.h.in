@@ -24,7 +24,7 @@
 # define BSP_CFG_PARAM_CHECKING_ENABLE (1)
 #endif
 
-#define BSP_CFG_ASSERT (0)
+#define BSP_CFG_ASSERT (0) // todo: but we do want assert
 #define BSP_CFG_ERROR_LOG (0)
 
 #define BSP_CFG_PFS_PROTECT ((1))
