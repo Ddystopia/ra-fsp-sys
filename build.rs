@@ -83,11 +83,28 @@ fn configure_modules(ctx: &mut tera::Context) {
 }
 
 pub fn wrap_component(modules: &[&str]) {
+    let src_c = Path::new("src_c");
+    let init_c = src_c.join("init.c");
+
+    println!("cargo:rerun-if-changed=script");
+    println!("cargo:rerun-if-changed={}", init_c.display());
+    println!("cargo:rerun-if-changed=build.rs");
+
+    println!("cargo:rerun-if-changed=fsp_cfg");
+    println!("cargo:rerun-if-changed=wrapper");
+    println!("cargo:rerun-if-changed=ra-fsp");
+    println!("cargo:rerun-if-changed=cmsis");
+
+    println!("cargo:rustc-link-lib=static=bare-fsp");
+
     let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let linker_scripts = out_path.join("script");
+
+    println!("cargo:rustc-link-search={}", linker_scripts.display());
+
     let fsp_cfg_out = out_path.join("fsp_cfg");
     let _ = fs::create_dir(&fsp_cfg_out);
 
-    let src_c = Path::new("src_c");
     let fsp_dir = Path::new("ra-fsp/ra/fsp");
     let fsp_src = fsp_dir.join("src");
     let include_dirs = vec![
@@ -138,12 +155,20 @@ pub fn wrap_component(modules: &[&str]) {
     // compile fsp library
 
     let bsp_stems = [
+        "startup",
         "system",
         "bsp_clocks",
         "bsp_delay",
         "bsp_irq",
         "bsp_common",
         "bsp_register_protection",
+        // "bsp_power",
+        // "bsp_security",
+        // "bsp_macl",
+        "bsp_group_irq", // NMI_Handler
+                         // "bsp_rom_registers",
+                         // "bsp_guard",
+                         // "bsp_sbrk",
     ];
     let mut build = cc::Build::new();
 
@@ -162,9 +187,7 @@ pub fn wrap_component(modules: &[&str]) {
         });
 
     // add custom init.c
-    let system_c = src_c.join("init.c");
-    build.file(&system_c);
-    println!("cargo:rerun-if-changed={}", system_c.to_str().unwrap());
+    build.file(&init_c);
 
     let mut rust_codegen = fs::OpenOptions::new()
         .write(true)
@@ -172,6 +195,8 @@ pub fn wrap_component(modules: &[&str]) {
         .truncate(true)
         .open(out_path.join("ra-fsp.rs"))
         .unwrap();
+
+    assert_eq!(Some("BSP_MCU_GROUP_RA6M3"), mcu_group());
 
     if let Some(mcu_group) = mcu_group() {
         build
@@ -182,14 +207,17 @@ pub fn wrap_component(modules: &[&str]) {
         write!(rust_codegen, "compile_error!(\"No MCU group defined\");").unwrap();
     }
 
-    println!("cargo:rustc-link-lib=static=bare-fsp");
+    if out_path.join("script").exists() {
+        fs::remove_dir_all(&linker_scripts).unwrap();
+    }
 
-    let linker_script = fs::read_to_string("ra-fsp-sys.x.in").unwrap();
-    println!("cargo:rerun-if-changed=ra-fsp-sys.x.in");
-
-    // Put the linker script somewhere the linker can find it
-    fs::write(out_path.join("ra-fsp-sys.x"), linker_script).unwrap();
-    println!("cargo:rustc-link-search={}", out_path.display());
+    std::process::Command::new("cp")
+        .arg("-f")
+        .arg("-r")
+        .arg("./script")
+        .arg(linker_scripts)
+        .status()
+        .expect("failed to copy `script`");
 }
 
 fn mcu_group() -> Option<&'static str> {

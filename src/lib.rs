@@ -1,7 +1,8 @@
 #![no_std]
 
-// todo: set stackoverflow protection
+// todo: set stackoverflow protection: splim
 // todo: study bsp_cfg.h in more depth
+// BSP_ICU_VECTOR_MAX_ENTRIES and BSP_FEATURE_ICU_FIXED_IELSR_COUNT
 
 mod generated {
     #![allow(non_camel_case_types)]

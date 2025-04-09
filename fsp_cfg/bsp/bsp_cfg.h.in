@@ -29,7 +29,6 @@
 
 #define BSP_CFG_PFS_PROTECT ((1))
 
-/* init is done by cortex-m-rt */
 #define BSP_CFG_C_RUNTIME_INIT ((0))
 #define BSP_CFG_EARLY_INIT     ((0))
 

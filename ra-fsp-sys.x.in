@@ -1,1 +1,0 @@
-PROVIDE(__Vectors = __vector_table);
