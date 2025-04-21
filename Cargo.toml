@@ -4,41 +4,42 @@ version = "0.1.1"
 edition = "2021"
 
 [dependencies]
-cortex-m-rt = "0.7"
+cortex-m = { version = "0.7.7", default-features = false }
+log = { version = "0.4.27", default-features = false, optional = true }
+ra6m3 = { path = "/home/ddystopia/job/ra/pac/ra6m3", features = ["rt", "critical-section"], optional = true }
 
 [build-dependencies]
 bindgen = "0.69"
+# bindgen_helpers = "0.3.2"
 cc = "1.1"
-walkdir = "2"
 build_cfg = "1.1"
-tera = "1.20"
+walkdir = "2"
+# tera = "1.20"
 
 [features]
 default = [
-  "bsp-mcu_vcc_mv_3300", "bsp-stack_main_bytes_16384",
+  "log",
   "mod-r_dmac",
   "mod-r_elc",
-  "mod-r_flash_hp", "mod-r_flash_hp-code_flash_programming_enable", "mod-r_flash_hp-data_flash_programming_enable",
+  "mod-r_flash_hp",
   "mod-r_icu",
   "mod-r_ioport",
 ]
 
-bsp-mcu_vcc_mv_2700 = []
-bsp-mcu_vcc_mv_3300 = []
-bsp-mcu_vcc_mv_5000 = []
-bsp-stack_main_bytes_4096 = []
-bsp-stack_main_bytes_8192 = []
-bsp-stack_main_bytes_16384 = []
-
+log = ["dep:log"]
 mod-r_dmac = []
 mod-r_elc = []
 
 mod-r_flash_hp = []
-mod-r_flash_hp-code_flash_programming_enable = []
-mod-r_flash_hp-data_flash_programming_enable = []
 
 mod-r_icu = []
 mod-r_ioport = []
+mod-r_ether = []
+mod-r_ether_phy = []
+mod-r_ether_phy_target_ics1894 = []
+mod-r_ether_phy_target_ksz8091rnb = []
+mod-r_ether_phy_target_ksz8041 = []
+mod-r_ether_phy_target_dp83620 = []
 
 # todo: support stuff except ra6m3
 ra0e1 = []

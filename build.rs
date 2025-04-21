@@ -2,11 +2,10 @@ use std::{
     collections::HashMap,
     fs,
     io::{BufRead, Write},
-    path::{Path, PathBuf},
+    path::{self, Path, PathBuf},
 };
 
 use build_cfg::{build_cfg, build_cfg_main};
-use tera::Tera;
 
 pub fn load_env<P: AsRef<std::path::Path>>(path: P) -> HashMap<String, String> {
     let mut res = HashMap::new();
@@ -30,145 +29,73 @@ pub fn load_env<P: AsRef<std::path::Path>>(path: P) -> HashMap<String, String> {
     res
 }
 
-fn configure_bsp(ctx: &mut tera::Context) {
-    let bsp_cfg = HashMap::<&'static str, u32>::from_iter(
-        [
-            (
-                "mcu_vcc_mv",
-                if build_cfg!(feature = "bsp-mcu_vcc_mv_2700") {
-                    2700
-                } else if build_cfg!(feature = "bsp-mcu_vcc_mv_3300") {
-                    3300
-                } else if build_cfg!(feature = "bsp-mcu_vcc_mv_5000") {
-                    5000
-                } else {
-                    panic!("Set one of bsp-mcu_vcc_mv_xxxx features!");
-                },
-            ),
-            (
-                "stack_main_bytes",
-                if build_cfg!(feature = "bsp-stack_main_bytes_4096") {
-                    4096
-                } else if build_cfg!(feature = "bsp-stack_main_bytes_8192") {
-                    8192
-                } else if build_cfg!(feature = "bsp-stack_main_bytes_16384") {
-                    16384
-                } else {
-                    panic!("Set one of bsp-stack_main_bytes_xxx features!");
-                },
-            ),
-        ]
-        .into_iter(),
-    );
-
-    ctx.insert("bsp", &bsp_cfg);
-}
-
-fn configure_modules(ctx: &mut tera::Context) {
-    let r_flash_hp_cfg = HashMap::<&'static str, u8>::from_iter(
-        [
-            (
-                "code_flash_programming_enable",
-                build_cfg!(feature = "mod-r_flash_hp-code_flash_programming_enable") as u8,
-            ),
-            (
-                "data_flash_programming_enable",
-                build_cfg!(feature = "mod-r_flash_hp-data_flash_programming_enable") as u8,
-            ),
-        ]
-        .into_iter(),
-    );
-
-    ctx.insert("r_flash_hp", &r_flash_hp_cfg);
-}
-
 pub fn wrap_component(modules: &[&str]) {
-    let src_c = Path::new("src_c");
-    let init_c = src_c.join("init.c");
+    let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let linker_scripts = out_path.join("script");
+    let fsp_dir = Path::new("ra-fsp/ra/fsp");
+    let fsp_src = fsp_dir.join("src");
+    let fsp_cfg = PathBuf::from(std::env::var("FSP_CFG").unwrap());
 
     println!("cargo:rerun-if-changed=script");
-    println!("cargo:rerun-if-changed={}", init_c.display());
     println!("cargo:rerun-if-changed=build.rs");
 
     println!("cargo:rerun-if-changed=fsp_cfg");
-    println!("cargo:rerun-if-changed=wrapper");
     println!("cargo:rerun-if-changed=ra-fsp");
     println!("cargo:rerun-if-changed=cmsis");
+    println!("cargo:rerun-if-changed={}", fsp_cfg.display());
 
-    println!("cargo:rustc-link-lib=static=bare-fsp");
-
-    let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let linker_scripts = out_path.join("script");
+    println!("cargo:rustc-link-lib=static=fsp_prelinked");
 
     println!("cargo:rustc-link-search={}", linker_scripts.display());
+    println!("cargo:rustc-link-search={}", out_path.display());
 
-    let fsp_cfg_out = out_path.join("fsp_cfg");
-    let _ = fs::create_dir(&fsp_cfg_out);
+    let mut rust_codegen = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(out_path.join("out.rs"))
+        .unwrap();
 
-    let fsp_dir = Path::new("ra-fsp/ra/fsp");
-    let fsp_src = fsp_dir.join("src");
+    let Some((mcu_group, bsp_mcu_group)) = mcu_group().zip(bsp_mcu_group()) else {
+        write!(rust_codegen, "compile_error!(\"No MCU group defined\");").unwrap();
+        return;
+    };
+
     let include_dirs = vec![
-        Path::new("fsp_cfg/bsp").to_path_buf(),
-        Path::new("fsp_cfg").to_path_buf(),
-        fsp_cfg_out.to_path_buf(),
-        Path::new("ra_gen").to_path_buf(),
-        Path::new("cmsis/CMSIS/Core/Include/").to_path_buf(),
+        // User defined configs
+        fsp_cfg.to_path_buf(),
+        fsp_cfg.join("bsp"),
+        // FSP includes
         fsp_dir.join("inc"),
         fsp_dir.join("inc/api"),
         fsp_dir.join("inc/instances"),
+        fsp_dir.join("src/bsp/cmsis/Device/RENESAS/Include"),
+        fsp_dir.join("src/bsp/mcu").join(mcu_group),
+        fsp_dir.join("src/bsp/mcu/all"),
+        Path::new("cmsis/CMSIS/Core/Include/").to_path_buf(),
+        // for clocks and stuff
+        Path::new("ra-fsp").to_path_buf(),
+        Path::new("ra_gen").to_path_buf(),
     ];
-
-    // render configuration files
-
-    let tera = Tera::new("fsp_cfg/**/*.h.in").expect("Can't parse templates in fsp_cfg/*.h.in");
-    let mut ctx = tera::Context::new();
-
-    configure_bsp(&mut ctx);
-    configure_modules(&mut ctx);
-
-    eprintln!("ctx = {ctx:?}");
-    for tmpl in tera.get_template_names() {
-        eprintln!("templates = {tmpl}");
-    }
-
-    for module in ["bsp"].iter().chain(modules.iter()) {
-        let tmpl_prefix = if module.starts_with("bsp") {
-            "bsp/"
-        } else {
-            ""
-        };
-        let tmpl = format!("{tmpl_prefix}{module}_cfg.h.in",);
-
-        // not all modules have configuration templates
-        if tera.get_template_names().find(|t| **t == tmpl).is_some() {
-            let tmpl_out = format!("{module}_cfg.h");
-
-            let cfg = tera
-                .render(&tmpl, &ctx)
-                .expect(&format!("Error rendering {tmpl}"));
-
-            fs::write(fsp_cfg_out.join(tmpl_out), cfg)
-                .expect("Error writing module configuration file");
-        }
-    }
 
     // compile fsp library
 
     let bsp_stems = [
         "startup",
         "system",
+        "bsp_io",
         "bsp_clocks",
         "bsp_delay",
         "bsp_irq",
         "bsp_common",
         "bsp_register_protection",
-        // "bsp_power",
-        // "bsp_security",
-        // "bsp_macl",
+        "bsp_power",
+        "bsp_security",
+        "bsp_macl",
         "bsp_group_irq", // NMI_Handler
-                         // "bsp_rom_registers",
-                         // "bsp_guard",
-                         // "bsp_sbrk",
+        "bsp_rom_registers",
+        "bsp_guard",
+        "bsp_sbrk",
     ];
     let mut build = cc::Build::new();
 
@@ -186,26 +113,14 @@ pub fn wrap_component(modules: &[&str]) {
             build.file(e.path());
         });
 
-    // add custom init.c
-    build.file(&init_c);
+    let objects = build
+        .includes(&include_dirs)
+        .define(&bsp_mcu_group, Some("1"))
+        .compile_intermediates();
 
-    let mut rust_codegen = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(out_path.join("ra-fsp.rs"))
-        .unwrap();
+    pre_link_archive("fsp_prelinked", objects);
 
-    assert_eq!(Some("BSP_MCU_GROUP_RA6M3"), mcu_group());
-
-    if let Some(mcu_group) = mcu_group() {
-        build
-            .includes(&include_dirs)
-            .define(mcu_group, Some("1"))
-            .compile("bare-fsp");
-    } else {
-        write!(rust_codegen, "compile_error!(\"No MCU group defined\");").unwrap();
-    }
+    assert!(out_path.join(&"libfsp_prelinked.a").exists());
 
     if out_path.join("script").exists() {
         fs::remove_dir_all(&linker_scripts).unwrap();
@@ -218,66 +133,111 @@ pub fn wrap_component(modules: &[&str]) {
         .arg(linker_scripts)
         .status()
         .expect("failed to copy `script`");
+
+    let bindgen = bindgen::Builder::default()
+        // The input header we would like to generate
+        // bindings for
+        .header_contents(
+            "r_ethernet_rs_wrapper.h",
+            r#"
+                #include "bsp_api.h"
+                #include "bsp_cfg.h"
+                #include "bsp_mcu_family_cfg.h"
+                #include "renesas.h"
+                #include "bsp_elc.h"
+                #include "bsp_irq.h"
+
+                #include "r_ether.h"
+                #include "r_ether_phy.h"
+                #include "r_ether_api.h"
+
+                #include <r_ioport_api.h>
+                #include <r_ioport.h>
+            "#,
+        )
+        .use_core()
+        .clang_arg(format!("-D{bsp_mcu_group}=1"))
+        .clang_args(
+            include_dirs
+                .iter()
+                .map(|d| path::absolute(d).expect("Can't resolve absolute path"))
+                .map(|e| format!("-I{}", e.as_os_str().to_str().unwrap())),
+        )
+        .allowlist_item("e_elc_event_.*")
+        .allowlist_item("fsp_err_t")
+        .allowlist_item("ELC_EVENT_.*")
+        .allowlist_item("BSP_ICU_VECTOR_MAX_ENTRIES")
+        // -
+        ;
+
+    let bindgen = if cfg!(feature = "mod-r_ether") {
+        bindgen
+            // .allowlist_item(".*ether_(?!phy_).*")
+            // .allowlist_item("^ETHER_(?!PHY_).*")
+            .allowlist_item(".*ether_.*")
+            .allowlist_item(".*ETHER_.*")
+            .parse_callbacks(Box::new(EtherCallbackArgs))
+    } else {
+        bindgen
+    };
+
+    let bindgen = if cfg!(feature = "mod-r_ether_phy") {
+        bindgen
+            .allowlist_item(".*ether_phy_.*")
+            .allowlist_item(".*ETHER_PHY_.*")
+            .rustified_enum("e_ether_padding")
+            .rustified_enum("e_ether_phy_mii_type")
+            .rustified_enum("e_ether_phy_lsi_type")
+    } else {
+        bindgen
+    };
+
+    let bindgen = if cfg!(feature = "mod-r_ioport") {
+        bindgen
+            .allowlist_item(".*ioport_.*")
+            .allowlist_item(".*io_port_.*")
+            .allowlist_item(".*IOPORT_.*")
+            .rustified_enum("e_bsp_io_port_pin_t")
+            // Those two are consts to do bit logic
+            .constified_enum_module("e_ioport_cfg_options")
+            .constified_enum_module("e_ioport_peripheral")
+    } else {
+        bindgen
+    };
+
+    bindgen
+        .derive_default(true)
+        // .derive_debug(true)
+        // .derive_partialeq(true)
+        .parse_callbacks(Box::new(
+            bindgen::CargoCallbacks::new().rerun_on_header_files(true),
+        ))
+        .prepend_enum_name(false)
+        .generate()
+        .expect("Unable to generate bindings")
+        .write(Box::new(&mut rust_codegen))
+        .expect("Couldn't write bindings!");
+
+    write!(
+        &mut rust_codegen,
+        "\npub type e_elc_event = e_elc_event_ra6m3;\n"
+    )
+    .unwrap();
 }
 
-fn mcu_group() -> Option<&'static str> {
-    Some(if cfg!(feature = "ra0e1") {
-        "BSP_MCU_GROUP_RA0E1"
-    } else if cfg!(feature = "ra2a1") {
-        "BSP_MCU_GROUP_RA2A1"
-    } else if cfg!(feature = "ra2a2") {
-        "BSP_MCU_GROUP_RA2A2"
-    } else if cfg!(feature = "ra2e1") {
-        "BSP_MCU_GROUP_RA2E1"
-    } else if cfg!(feature = "ra2e2") {
-        "BSP_MCU_GROUP_RA2E2"
-    } else if cfg!(feature = "ra2e3") {
-        "BSP_MCU_GROUP_RA2E3"
-    } else if cfg!(feature = "ra2l1") {
-        "BSP_MCU_GROUP_RA2L1"
-    } else if cfg!(feature = "ra4e1") {
-        "BSP_MCU_GROUP_RA4E1"
-    } else if cfg!(feature = "ra4e2") {
-        "BSP_MCU_GROUP_RA4E2"
-    } else if cfg!(feature = "ra4m1") {
-        "BSP_MCU_GROUP_RA4M1"
-    } else if cfg!(feature = "ra4m2") {
-        "BSP_MCU_GROUP_RA4M2"
-    } else if cfg!(feature = "ra4m3") {
-        "BSP_MCU_GROUP_RA4M3"
-    } else if cfg!(feature = "ra4t1") {
-        "BSP_MCU_GROUP_RA4T1"
-    } else if cfg!(feature = "ra4w1") {
-        "BSP_MCU_GROUP_RA4W1"
-    } else if cfg!(feature = "ra6e1") {
-        "BSP_MCU_GROUP_RA6E1"
-    } else if cfg!(feature = "ra6e2") {
-        "BSP_MCU_GROUP_RA6E2"
-    } else if cfg!(feature = "ra6m1") {
-        "BSP_MCU_GROUP_RA6M1"
-    } else if cfg!(feature = "ra6m2") {
-        "BSP_MCU_GROUP_RA6M2"
-    } else if cfg!(feature = "ra6m3") {
-        "BSP_MCU_GROUP_RA6M3"
-    } else if cfg!(feature = "ra6m4") {
-        "BSP_MCU_GROUP_RA6M4"
-    } else if cfg!(feature = "ra6m5") {
-        "BSP_MCU_GROUP_RA6M5"
-    } else if cfg!(feature = "ra6t1") {
-        "BSP_MCU_GROUP_RA6T1"
-    } else if cfg!(feature = "ra6t2") {
-        "BSP_MCU_GROUP_RA6T2"
-    } else if cfg!(feature = "ra6t3") {
-        "BSP_MCU_GROUP_RA6T3"
-    } else if cfg!(feature = "ra8m1") {
-        "BSP_MCU_GROUP_RA8M1"
-    } else if cfg!(feature = "ra8d1") {
-        "BSP_MCU_GROUP_RA8D1"
-    } else if cfg!(feature = "ra8t1") {
-        "BSP_MCU_GROUP_RA8T1"
-    } else {
-        return None;
-    })
+#[derive(Debug)]
+struct EtherCallbackArgs;
+impl bindgen::callbacks::ParseCallbacks for EtherCallbackArgs {
+    fn field_visibility(
+        &self,
+        info: bindgen::callbacks::FieldInfo<'_>,
+    ) -> Option<bindgen::FieldVisibilityKind> {
+        if info.type_name == "st_ether_callback_args" {
+            Some(bindgen::FieldVisibilityKind::PublicCrate)
+        } else {
+            None
+        }
+    }
 }
 
 macro_rules! add_module {
@@ -294,6 +254,133 @@ fn main() {
 
     add_module!(modules, "mod-r_icu");
     add_module!(modules, "mod-r_flash_hp");
+    add_module!(modules, "mod-r_ioport");
+    add_module!(modules, "mod-r_ether");
+    add_module!(modules, "mod-r_ether_phy");
+    add_module!(modules, "mod-r_ether_phy_target_ics1894");
+    add_module!(modules, "mod-r_ether_phy_target_ksz8091rnb");
+    add_module!(modules, "mod-r_ether_phy_target_dp83620");
+    add_module!(modules, "mod-r_ether_phy_target_ksz8041");
 
     wrap_component(&modules);
 }
+
+fn pre_link_archive(new_name: &str, objects: Vec<PathBuf>) {
+    let out_path = PathBuf::from(std::env::var("OUT_DIR").expect("Output dir must be set"));
+    let joined_obj_name = format!("{new_name}.o");
+    let archive_name = format!("lib{new_name}.a");
+
+    let ld = std::env::var("LD").expect("LD must be set");
+
+    std::process::Command::new(&ld)
+        .arg("-r")
+        .args(objects)
+        .arg("-o")
+        .arg(&joined_obj_name)
+        .current_dir(&out_path)
+        .spawn()
+        .expect("failed to prelink")
+        .wait()
+        .unwrap();
+
+    cc::Build::new()
+        .get_archiver()
+        .arg("rcs")
+        .arg(&archive_name)
+        .arg(&joined_obj_name)
+        .current_dir(&out_path)
+        .spawn()
+        .expect("failed to archive")
+        .wait()
+        .unwrap();
+}
+
+fn bsp_mcu_group() -> Option<String> {
+    Some(format!("BSP_MCU_GROUP_{}", mcu_group()?.to_uppercase()))
+}
+
+fn mcu_group() -> Option<&'static str> {
+    Some(if cfg!(feature = "ra0e1") {
+        "ra0e1"
+    } else if cfg!(feature = "ra2a1") {
+        "ra2a1"
+    } else if cfg!(feature = "ra2a2") {
+        "ra2a2"
+    } else if cfg!(feature = "ra2e1") {
+        "ra2e1"
+    } else if cfg!(feature = "ra2e2") {
+        "ra2e2"
+    } else if cfg!(feature = "ra2e3") {
+        "ra2e3"
+    } else if cfg!(feature = "ra2l1") {
+        "ra2l1"
+    } else if cfg!(feature = "ra4e1") {
+        "ra4e1"
+    } else if cfg!(feature = "ra4e2") {
+        "ra4e2"
+    } else if cfg!(feature = "ra4m1") {
+        "ra4m1"
+    } else if cfg!(feature = "ra4m2") {
+        "ra4m2"
+    } else if cfg!(feature = "ra4m3") {
+        "ra4m3"
+    } else if cfg!(feature = "ra4t1") {
+        "ra4t1"
+    } else if cfg!(feature = "ra4w1") {
+        "ra4w1"
+    } else if cfg!(feature = "ra6e1") {
+        "ra6e1"
+    } else if cfg!(feature = "ra6e2") {
+        "ra6e2"
+    } else if cfg!(feature = "ra6m1") {
+        "ra6m1"
+    } else if cfg!(feature = "ra6m2") {
+        "ra6m2"
+    } else if cfg!(feature = "ra6m3") {
+        "ra6m3"
+    } else if cfg!(feature = "ra6m4") {
+        "ra6m4"
+    } else if cfg!(feature = "ra6m5") {
+        "ra6m5"
+    } else if cfg!(feature = "ra6t1") {
+        "ra6t1"
+    } else if cfg!(feature = "ra6t2") {
+        "ra6t2"
+    } else if cfg!(feature = "ra6t3") {
+        "ra6t3"
+    } else if cfg!(feature = "ra8m1") {
+        "ra8m1"
+    } else if cfg!(feature = "ra8d1") {
+        "ra8d1"
+    } else if cfg!(feature = "ra8t1") {
+        "ra8t1"
+    } else {
+        return None;
+    })
+}
+
+/*
+CFLAGS = """-isysroot=/opt/arm-bare_newlibnanolto_cortex_m4f_nommu-eabihf/arm-bare_newlibnanolto_cortex_m4f_nommu-eabihf \
+  -DBOARD_HEATHUB_V_0_1=1 -DFIRMWARE_VERSION=\\\"0.14.2\\\" -DFW_VERSION_MAJOR=0 -DFW_VERSION_MINOR=14 -DFW_VERSION_PATCH=2 \
+  -DHW_ID=\\\"84:3010:0001\\\" -DHW_ID_PID=0x3010 -DHW_ID_REV=0x0001 -DHW_ID_VID=0x84 -DSTATICFS_CONSUMER=1 -DTX_INCLUDE_USER_DEFINE_FILE \
+  -DURTU_APP=\\\"HEATHUB\\\" -DURTU_APP_HEATHUB=1 -DURTU_APP_LC=\\\"heathub\\\" -DURTU_BOARD=HEATHUB_V_0_1 -DURTU_BOARD_QSPI_FLASH=0 \
+  -DURTU_BOARD_U1_MODE=URTU_AO_M_VOLTAGE -DURTU_BOARD_U2_MODE=URTU_AO_M_VOLTAGE -DURTU_IWDT_ENABLE=1 -DURTU_TLS_TEST=0 -DWIFI_WF200=1 \
+  -I/home/ddystopia/job/fw-micrortu/inc \
+  -I/home/ddystopia/job/fw-micrortu/ra_gen \
+  -I/home/ddystopia/job/fw-micrortu/dep/cmsis5/CMSIS/Core/Include \
+  -I/home/ddystopia/job/fw-micrortu/dep/cmsis5/Device/ARM/ARMCM4/Include \
+  -I/home/ddystopia/job/fw-micrortu/ra_cfg/fsp_cfg \
+  -I/home/ddystopia/job/fw-micrortu/ra_cfg/fsp_cfg/bsp \
+  -I/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/inc \
+  -I/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/inc/api \
+  -I/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/inc/instances \
+  -I/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/src/bsp/mcu/all \
+  -I/home/ddystopia/job/fw-micrortu/dep/staticfs \
+  -I/home/ddystopia/job/fw-micrortu/ra_cfg/fsp_cfg/azure/tx \
+  -I/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/src/rm_threadx_port \
+  -I/home/ddystopia/job/fw-micrortu/dep/threadx/common/inc \
+  -I/home/ddystopia/job/fw-micrortu/dep/threadx/ports/cortex_m4/gnu/inc \
+  -I/home/ddystopia/job/fw-micrortu/dep/ra-bsp/inc \
+  -Wall -mlittle-endian -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mno-unaligned-access --std=gnu11 \
+  -ffunction-sections -fdata-sections -Woverride-init -fno-short-enums -gdwarf-4 -flto=auto -g3 -O0"""
+*/
