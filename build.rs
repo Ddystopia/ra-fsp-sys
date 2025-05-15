@@ -34,7 +34,7 @@ pub fn wrap_component(modules: &[&str]) {
     let linker_scripts = out_path.join("script");
     let fsp_dir = Path::new("ra-fsp/ra/fsp");
     let fsp_src = fsp_dir.join("src");
-    let fsp_cfg = PathBuf::from(std::env::var("FSP_CFG").unwrap());
+    let fsp_cfg = PathBuf::from(std::env::var("FSP_CFG").expect("FSP_CFG must be set"));
 
     println!("cargo:rerun-if-changed=script");
     println!("cargo:rerun-if-changed=build.rs");
