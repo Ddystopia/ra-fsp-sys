@@ -114,7 +114,7 @@ pub struct EtherConfig<const BUF_SIZE: usize> {
 
     pub pp_ether_buffers: Option<&'static mut [&'static mut Buffer<BUF_SIZE>]>,
     pub irq: Interrupt,
-    pub interrupt_priority: u32,
+    pub interrupt_priority: Option<u32>,
     pub p_ether_phy_instance: &'static ether_phy_instance_t,
 
     // if we want this to be `&'static dyn Fn(&ether_callback_args_t)`, then we
@@ -366,7 +366,7 @@ impl<const BUF_SIZE: usize> EtherConfig<BUF_SIZE> {
     pub const fn broadcast_filter(mut self, filter: u32) -> Self { self.broadcast_filter = filter; self }
     pub const fn mac(mut self, mac: &'static [u8; 6]) -> Self { self.p_mac_address = mac; self }
     pub const fn irq(mut self, irq: Interrupt) -> Self { self.irq = irq;  self }
-    pub const fn irq_priority(mut self, priority: u32) -> Self {  self.interrupt_priority = priority; self }
+    pub const unsafe fn irq_priority(mut self, priority: u32) -> Self {  self.interrupt_priority = Some(priority); self }
     pub const fn callback(mut self, callback: extern "C" fn(&ether_callback_args_t)) -> Self { self.callback = Some(callback); self }
     pub const fn ether_buffers(mut self, buffers: &'static mut [&'static mut Buffer<BUF_SIZE>]) -> Self { self.pp_ether_buffers = Some(buffers); self }
     pub const fn rx_descriptors(mut self, descriptors: &'static [Descriptor<BUF_SIZE>]) -> Self { self.rx_descriptors = descriptors; self }
@@ -381,6 +381,10 @@ impl<const BUF_SIZE: usize> EtherConfig<BUF_SIZE> {
         self.rx_buffers = &mut buffers.rx_buffers;
         self.tx_buffers = &mut buffers.tx_buffers; 
         self.tx_taken = &mut buffers.tx_taken; 
+    }
+    pub fn unchange_irq_priority(&mut self) {
+        let hw_priority = cortex_m::peripheral::NVIC::get_priority(self.irq);
+        self.interrupt_priority = Some(hw_prio_to_fsp(hw_priority, ra6m3::NVIC_PRIO_BITS));
     }
 
     pub const fn c_conf(&'static self) -> &'static ether_cfg_t {
@@ -444,7 +448,7 @@ impl<const BUF_SIZE: usize> EtherConfig<BUF_SIZE> {
             num_rx_descriptors,
             ether_buffer_size: BUF_SIZE as u32,
             irq: self.irq as u16 as _,
-            interrupt_priority: self.interrupt_priority,
+            interrupt_priority: self.interrupt_priority.expect("Interrupt priority is not set"),
             p_callback: match self.callback {
                 Some(c) => Some(cast_callback(c)),
                 None => None,
@@ -564,11 +568,26 @@ macro_rules! fsp_try {
     };
 }
 
+// fixme: not true on __CORTEX_M == 23
+const fn fsp_prio_to_hw(priority: u32, nvic_prio_bits: u8) -> u8 {
+    ((priority << (8 - nvic_prio_bits) as u32) & (u8::MAX as u32)) as u8
+}
+
+const fn hw_prio_to_fsp(hw_priority: u8, nvic_prio_bits: u8) -> u32 {
+    (hw_priority as u32) >> (8 - nvic_prio_bits) as u32
+}
+
+const _: () = assert!(fsp_prio_to_hw(14, 4) == 224);
+const _: () = assert!(hw_prio_to_fsp(224, 4) == 14);
+
 impl<const BUF_SIZE: usize> EtherInstance<BUF_SIZE> {
     pub fn open(
         mut self: Pin<&mut Self>,
         conf: &'static mut EtherConfig<BUF_SIZE>,
     ) -> Result<(), fsp_err_t> {
+        if conf.interrupt_priority.is_none() {
+            conf.unchange_irq_priority();
+        }
         unsafe {
             use core::mem::replace;
 
