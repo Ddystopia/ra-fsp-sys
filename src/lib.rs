@@ -1,11 +1,14 @@
 #![no_std]
 #![feature(ptr_metadata)]
 
+#[cfg(feature = "ra6m3")]
+pub use ::ra6m3 as pac;
+
 // todo: set stackoverflow protection: splim
 // todo: study bsp_cfg.h in more depth
 // BSP_FEATURE_ICU_FIXED_IELSR_COUNT
 
-mod generated {
+pub mod generated {
     #![allow(non_camel_case_types)]
     #![allow(non_upper_case_globals)]
     #![allow(non_snake_case)]
@@ -15,50 +18,67 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/out.rs"));
 }
 
-pub mod unsafe_pinned {
-    use core::{cell::UnsafeCell, marker::PhantomPinned};
+#[cfg(feature = "mod-r_ether")]
+pub mod r_ether {
+    use crate::generated::{
+        ether_callback_args_t, ETHER_EVENT_INTERRUPT, ETHER_EVENT_LINK_OFF, ETHER_EVENT_LINK_ON,
+    };
 
-    pub struct UnsafePinned<T: ?Sized>(PhantomPinned, UnsafeCell<T>);
-
-    unsafe impl<T: ?Sized + Sync> Sync for UnsafePinned<T> {}
-    unsafe impl<T: ?Sized + Send> Send for UnsafePinned<T> {}
-
-    impl<T> UnsafePinned<T> {
-        pub const fn new(value: T) -> Self {
-            Self(PhantomPinned, UnsafeCell::new(value))
-        }
+    #[derive(Debug)]
+    #[non_exhaustive]
+    pub struct InterruptCause {
+        pub went_up: bool,
+        pub went_down: bool,
+        pub receive: bool,
+        pub transmits: bool,
     }
 
-    impl<T: ?Sized> UnsafePinned<T> {
-        pub const fn get(&self) -> *mut T {
-            self.1.get()
-        }
-        pub const fn raw_get(this: *const Self) -> *mut T {
-            unsafe { UnsafeCell::raw_get(&raw const (*this).1) }
-        }
+    pub fn interrupt_cause(args: &mut ether_callback_args_t) -> InterruptCause {
+        const EVENT_TAKEN: u32 = u32::MAX;
+
+        /* Transmit Complete. (all pending transmissions) */
+        const ETHER_EDMAC_INTERRUPT_FACTOR_TC: u32 = 1 << 21;
+        /* Frame Receive. */
+        const ETHER_EDMAC_INTERRUPT_FACTOR_FR: u32 = 1 << 18;
+
+        let mut cause = InterruptCause {
+            receive: false,
+            transmits: false,
+            went_up: false,
+            went_down: false,
+        };
+
+        match core::mem::replace(&mut args.event, EVENT_TAKEN) {
+            EVENT_TAKEN => (),
+            ETHER_EVENT_INTERRUPT => {
+                let receive_mask = ETHER_EDMAC_INTERRUPT_FACTOR_FR;
+                let trasmit_mask = ETHER_EDMAC_INTERRUPT_FACTOR_TC;
+
+                /* Packet received. */
+                if receive_mask == (args.status_eesr & receive_mask) {
+                    cause.receive = true;
+                }
+
+                if trasmit_mask == (args.status_eesr & trasmit_mask) {
+                    cause.transmits = true;
+                }
+            }
+            ETHER_EVENT_LINK_ON => {
+                cause.went_up = true;
+            }
+            ETHER_EVENT_LINK_OFF => {
+                cause.went_down = true;
+
+                /*
+                 * When the link is re-established, the Ethernet driver will reset all of the buffer descriptors.
+                 */
+            }
+            _ => {}
+        };
+
+        cause
     }
 }
-
-#[cfg(feature = "mod-r_ether")]
-pub mod ether;
-#[cfg(feature = "mod-r_ether_phy")]
-pub mod ether_phy;
-#[cfg(feature = "mod-r_ioport")]
-pub mod ioport;
-
-mod macros;
-
-pub use generated::{
-    e_elc_event, //
-    BSP_ICU_VECTOR_MAX_ENTRIES,
-    ELC_EVENT_EDMAC0_EINT,
-    ELC_EVENT_NONE,
-};
-
-#[cfg(feature = "ra6m3")]
-use ::ra6m3 as pac;
-
-pub use pac::*;
 
 #[doc(hidden)]
 #[no_mangle]
@@ -84,7 +104,7 @@ pub extern "C" fn __assert_func(file: *const u8, line: i32, func: *const u8, exp
 
 #[cfg(feature = "log")]
 #[unsafe(no_mangle)]
-pub extern "C" fn __log_func(
+pub unsafe extern "C" fn __fsp_log_func(
     level: u32,
     module: *const u8,
     file: *const u8,
@@ -121,3 +141,37 @@ pub extern "C" fn __log_func(
 // 		__attribute__ ((format (printf, 5, 6)));
 // #define FSP_LOG_PRINT(X)    _log(1, "bsp", __FILE__, __LINE__, "%s", (X))
 //
+
+#[cfg(feature = "mod-r_ioport")]
+mod r_ioport_impl {
+    use super::generated::*;
+
+    unsafe impl Sync for ioport_instance_ctrl_t {}
+    unsafe impl Sync for ioport_instance_t {}
+    unsafe impl Sync for ioport_cfg_t {}
+    unsafe impl Sync for ioport_pin_cfg_t {}
+}
+
+#[cfg(feature = "mod-r_ether")]
+mod r_ether_impl {
+    use super::generated::*;
+
+    unsafe impl Sync for ether_cfg_t {}
+    unsafe impl Sync for ether_api_t {}
+    unsafe impl Sync for ether_instance_ctrl_t {}
+    unsafe impl Sync for ether_instance_t {}
+    unsafe impl Sync for ether_extended_cfg_t {}
+    unsafe impl Sync for ether_instance_descriptor_t {}
+    unsafe impl Sync for ether_callback_args_t {}
+    unsafe impl Send for ether_callback_args_t {}
+}
+
+#[cfg(feature = "mod-r_ether_phy")]
+mod r_ether_phy_impl {
+    use super::generated::*;
+
+    unsafe impl Sync for ether_phy_cfg_t {}
+    unsafe impl Sync for ether_phy_api_t {}
+    unsafe impl Sync for ether_phy_instance_ctrl_t {}
+    unsafe impl Sync for ether_phy_instance_t {}
+}
