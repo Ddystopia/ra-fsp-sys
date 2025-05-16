@@ -165,7 +165,7 @@ pub fn wrap_component(modules: &[&str]) {
         )
         .allowlist_item("e_elc_event_.*")
         .allowlist_item("fsp_err_t")
-        .allowlist_item("ELC_EVENT_.*")
+        .rustified_enum(&format!("e_elc_event_{mcu_group}"))
         .allowlist_item("BSP_ICU_VECTOR_MAX_ENTRIES")
         // -
         ;
