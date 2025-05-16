@@ -1,9 +1,6 @@
 #![no_std]
 #![feature(ptr_metadata)]
 
-#[cfg(feature = "ra6m3")]
-pub use ::ra6m3 as pac;
-
 // todo: set stackoverflow protection: splim
 // todo: study bsp_cfg.h in more depth
 // BSP_FEATURE_ICU_FIXED_IELSR_COUNT
