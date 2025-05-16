@@ -1,3 +1,4 @@
+/* todo: linker script management */
 INCLUDE memory_regions_base.ld
 INCLUDE device.x /* PACs default handlers for IV */
 
